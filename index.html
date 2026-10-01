@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>E-Duty TEST Voice Recorder</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f5f6f8;color:#222;font:16px Arial,sans-serif}main{max-width:650px;margin:32px auto;padding:0 16px}.panel{background:#fff;border:1px solid #e1e5eb;border-radius:12px;padding:22px}.notice{background:#fff3cd;padding:12px;border-radius:8px}button,a.download{display:inline-block;border:0;border-radius:7px;padding:12px 18px;margin:6px 6px 6px 0;background:#111827;color:#fff;font:inherit;text-decoration:none;cursor:pointer}.secondary{background:#e5e7eb!important;color:#111!important}button:disabled{opacity:.5;cursor:wait}[hidden]{display:none!important}audio{display:block;width:100%;margin:16px 0}.error{color:#b42318}#status{white-space:pre-wrap}
+</style></head><body><main><h1>E-Duty TEST Voice Recorder</h1><p class="notice">TEST only. Record a maximum of 30 seconds and 2 MB. Keep the duty tab open until it confirms the save.</p><section class="panel"><p id="status" role="status" aria-live="polite">Connecting to your open duty…</p><button id="start" disabled>Start Recording</button><button id="stop" class="secondary" hidden>Stop Recording</button><button id="save" hidden>Save to Open Duty</button><button id="discard" class="secondary" hidden>Discard</button><audio id="preview" controls hidden></audio><a id="download" class="download secondary" hidden>Download audio instead</a></section><p>Microphone permission is requested only on this HTTPS page. The recording is sent to your open duty tab only when you click Save. No login details are sent here.</p></main>
+<script>
+'use strict';
+const $=id=>document.getElementById(id);
+const channel=new URLSearchParams(location.hash.slice(1)).get('channel');
+history.replaceState(null,'',location.pathname+location.search);
+let dutyWindow=null,dutyOrigin='',recorder=null,stream=null,timer=null,saveTimer=null,chunks=[],blob=null,blobUrl='',saving=false;
+function status(s,error=false){$('status').textContent=s;$('status').className=error?'error':'';}
+function validDutyOrigin(origin){try{const u=new URL(origin);return u.protocol==='https:'&&(u.hostname==='script.googleusercontent.com'||u.hostname.endsWith('-script.googleusercontent.com')||u.hostname==='script.google.com');}catch(_){return false;}}
+function stopTracks(){if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;}if(timer){clearTimeout(timer);timer=null;}}
+function resetDraft(){stopTracks();if(recorder&&recorder.state==='recording'){recorder.onstop=null;recorder.stop();}recorder=null;chunks=[];blob=null;if(blobUrl)URL.revokeObjectURL(blobUrl);blobUrl='';$('preview').pause();$('preview').removeAttribute('src');$('preview').hidden=true;$('download').hidden=true;$('save').hidden=true;$('discard').hidden=true;$('start').hidden=!dutyWindow;$('stop').hidden=true;}
+window.addEventListener('message',event=>{const m=event.data;if(!m||typeof m!=='object'||m.channel!==channel||!validDutyOrigin(event.origin)||event.source!==window.opener)return;
+  if(m.type==='EDUTY_RECORDER_CONNECT'){dutyWindow=event.source;dutyOrigin=event.origin;$('start').disabled=false;status('Connected. Click Start Recording, then allow microphone access.');}
+  if(m.type==='EDUTY_RECORDER_SAVED'&&saving){clearTimeout(saveTimer);saveTimer=null;saving=false;resetDraft();$('start').disabled=true;status('Voice note saved to the duty. You may close this tab.');}
+  if(m.type==='EDUTY_RECORDER_ERROR'&&saving){clearTimeout(saveTimer);saveTimer=null;saving=false;$('save').disabled=false;status('Save did not complete: '+String(m.message||'Unknown error')+'. Retry Save, or download the audio.',true);}
+});
+if(!channel||!/^[0-9a-f-]{36}$/i.test(channel)||!window.opener){$('start').hidden=true;status('Open this recorder from a TEST duty. If the connection is lost, use the existing audio-file upload.',true);}
+else {window.opener.postMessage({type:'EDUTY_RECORDER_READY',channel},'*'); // Readiness carries no audio or credentials.
+  setTimeout(()=>{if(!dutyWindow)status('Cannot connect to the duty tab. Keep it open, close this recorder, and open it again from the duty.',true);},5000);}
+$('start').onclick=async()=>{if(!dutyWindow||saving)return;if(!navigator.mediaDevices?.getUserMedia||!window.MediaRecorder){status('This browser cannot record audio. Use a current browser over HTTPS.',true);return;}
+  const mime=['audio/webm;codecs=opus','audio/webm','audio/mp4','audio/ogg;codecs=opus','audio/ogg'].find(t=>MediaRecorder.isTypeSupported(t));if(!mime){status('No supported recording format in this browser.',true);return;}
+  resetDraft();try{stream=await navigator.mediaDevices.getUserMedia({audio:true});recorder=new MediaRecorder(stream,{mimeType:mime});chunks=[];
+    recorder.ondataavailable=e=>{if(e.data?.size)chunks.push(e.data);};recorder.onstop=()=>{stopTracks();const type=recorder.mimeType.split(';')[0];recorder=null;blob=new Blob(chunks,{type});chunks=[];$('stop').hidden=true;
+      if(blob.size<100||blob.size>2000000){blob=null;$('start').hidden=false;status('Recording is empty or above 2 MB. Record a shorter note.',true);return;}
+      blobUrl=URL.createObjectURL(blob);$('preview').src=blobUrl;$('preview').hidden=false;$('download').href=blobUrl;$('download').download='eduty-test-voice.'+(type==='audio/webm'?'webm':type==='audio/ogg'?'ogg':'m4a');$('download').hidden=false;$('save').hidden=false;$('discard').hidden=false;status('Listen to your recording, then click Save to Open Duty.');};
+    recorder.start();timer=setTimeout(()=>recorder?.state==='recording'&&recorder.stop(),30000);$('start').hidden=true;$('stop').hidden=false;status('Recording… Click Stop or wait 30 seconds.');
+  }catch(e){resetDraft();status(e?.name==='NotAllowedError'?'Microphone access was denied for this HTTPS page. Check this page’s site permission.':'Could not start recording: '+String(e?.message||e),true);}};
+$('stop').onclick=()=>{if(recorder?.state==='recording')recorder.stop();};
+$('discard').onclick=()=>{resetDraft();status('Recording discarded. You can start again.');};
+$('save').onclick=()=>{if(!blob||!dutyWindow||saving)return;saving=true;$('save').disabled=true;status('Sending to the open duty tab. Keep both tabs open…');dutyWindow.postMessage({type:'EDUTY_RECORDER_AUDIO',channel,blob},dutyOrigin);saveTimer=setTimeout(()=>{if(saving){saving=false;$('save').disabled=false;status('No save confirmation yet. Check the duty tab; if the note is not listed, retry Save with the same recording.',true);}},100000);};
+window.addEventListener('beforeunload',stopTracks);
+</script></body></html>
